@@ -1,0 +1,8 @@
+#git ignore
+
+*.iml
+/.aws-sam
+/.idea
+/MessageProcessorFunction/target/
+/RedriveFunction/target/
+*/.mvn/

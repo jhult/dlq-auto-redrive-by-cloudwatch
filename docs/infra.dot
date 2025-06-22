@@ -1,0 +1,28 @@
+digraph INFRA {
+  node [ color = "black", fillcolor = "#E6E6E6", height =1, style = "filled,bold,rounded", fontname = "Arial" ];
+  "DeadLetterQueue" [ label = "DeadLetterQueue
+(AWS::SQS::Queue)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "PrimaryQueue" [ label = "PrimaryQueue
+(AWS::SQS::Queue)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "MessageProcessorFunction" [ label = "MessageProcessorFunction
+(AWS::Serverless::Function)", shape =rectangle, fillcolor = "#B7E0FF" ];
+  "MessageProcessorFunctionLogGroup" [ label = "MessageProcessorFunctionLogGroup
+(AWS::Logs::LogGroup)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "RedriveFunction" [ label = "RedriveFunction
+(AWS::Serverless::Function)", shape =rectangle, fillcolor = "#B7E0FF" ];
+  "RedriveFunctionLogGroup" [ label = "RedriveFunctionLogGroup
+(AWS::Logs::LogGroup)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "AlarmSnsTopic" [ label = "AlarmSnsTopic
+(AWS::SNS::Topic)", shape =rectangle, fillcolor = "#CCE0AC" ];
+  "DLQAlarm" [ label = "DLQAlarm
+(AWS::CloudWatch::Alarm)", shape =rectangle ];
+  "PrimaryQueue" -> "DeadLetterQueue";
+  "MessageProcessorFunction" -> "PrimaryQueue";
+  "MessageProcessorFunctionLogGroup" -> "MessageProcessorFunction";
+  "RedriveFunction" -> "DeadLetterQueue";
+  "RedriveFunction" -> "PrimaryQueue";
+  "RedriveFunction" -> "AlarmSnsTopic";
+  "RedriveFunctionLogGroup" -> "RedriveFunction";
+  "DLQAlarm" -> "DeadLetterQueue";
+  "DLQAlarm" -> "AlarmSnsTopic";
+}

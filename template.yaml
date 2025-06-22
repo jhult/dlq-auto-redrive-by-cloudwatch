@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM template for an SQS to Lambda processor with an automated DLQ redrive mechanism.
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 512
+    Runtime: java17
+    Architectures:
+      - x86_64
+
+Resources:
+  # --- SQS Queues ---
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      # Messages will be retained for 4 days in the DLQ. The alarm should trigger well before this.
+      MessageRetentionPeriod: 345600 # 4 days in seconds
+
+  PrimaryQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      # Set visibility timeout to match Lambda function timeout
+      VisibilityTimeout: 60
+      # The RedrivePolicy specifies that after a message fails processing 3 times,
+      # it will be moved to the DeadLetterQueue.
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  # --- Lambda Functions ---
+
+  MessageProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: MessageProcessorFunction/
+      Handler: com.whysurfswim.MessageProcessor::handleRequest
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt PrimaryQueue.Arn
+            BatchSize: 10
+
+  MessageProcessorFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${MessageProcessorFunction}
+      RetentionInDays: 7
+
+  RedriveFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: RedriveFunction/
+      Handler: com.whysurfswim.RedriveProcessor::handleRequest
+      Policies:
+        # This function needs permission to start a message move task from the DLQ.
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sqs:StartMessageMoveTask
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:SendMessage
+                - sqs:GetQueueAttributes
+              Resource: !GetAtt DeadLetterQueue.Arn
+            - Effect: Allow
+              Action:
+                - sqs:StartMessageMoveTask
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:SendMessage
+                - sqs:GetQueueAttributes
+              Resource: !GetAtt PrimaryQueue.Arn
+      Environment:
+        Variables:
+          DLQ_ARN: !GetAtt DeadLetterQueue.Arn
+          PRIMARY_QUEUE_URL: !Ref PrimaryQueue
+          DEPLOYED_AWS_REGION: !Ref AWS::Region
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic: !Ref AlarmSnsTopic
+
+  RedriveFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${RedriveFunction}
+      RetentionInDays: 7
+
+  # --- SNS Topic for Alarm Notifications ---
+
+  # amazonq-ignore-next-line
+  AlarmSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: 'DLQ Alarm Topic for Redrive'
+
+  # --- CloudWatch Alarm ---
+
+  # amazonq-ignore-next-line
+  DLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: 'DLQOldestMessageAlarm'
+      AlarmDescription: 'Alarm when messages in DLQ are older than the threshold, triggering a redrive.'
+      Namespace: 'AWS/SQS'
+      MetricName: 'ApproximateAgeOfOldestMessage'
+      Dimensions:
+        - Name: 'QueueName'
+          Value: !GetAtt DeadLetterQueue.QueueName
+      Statistic: 'Maximum'
+      Period: 60 # 1 minute
+      EvaluationPeriods: 1
+      Threshold: 300 # 5 minutes
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold'
+      # When the alarm enters the ALARM state, it will publish a message to the SNS topic.
+      # The RedriveFunction is subscribed to this topic.
+      AlarmActions:
+        - !Ref AlarmSnsTopic
+
+Outputs:
+  PrimaryQueueUrl:
+    Description: "URL of the primary SQS queue."
+    Value: !Ref PrimaryQueue
+  DeadLetterQueueUrl:
+    Description: "URL of the SQS Dead-Letter Queue."
+    Value: !Ref DeadLetterQueue
+  MessageProcessorFunctionArn:
+    Description: "ARN of the message processing Lambda function."
+    Value: !GetAtt MessageProcessorFunction.Arn
+  RedriveFunctionArn:
+    Description: "ARN of the DLQ redrive Lambda function."
+    Value: !GetAtt RedriveFunction.Arn
